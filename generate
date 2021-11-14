@@ -1,0 +1,238 @@
+#!/bin/env perl 
+
+use lib qw(.);
+
+use College;
+use Data::Dumper;
+use Email::Send::SMTP::Gmail;
+use FileHandle;
+use Smart::Comments;
+use Text::CSV;
+
+use Getopt::Long;
+
+my $options = 
+  {
+    'email' => 0,
+  };
+
+sub WriteDraft { 
+  my( $name, $text ) = @_;
+
+  $name =~ s/\s//g;
+
+  my $filename = sprintf( "%s/%s.txt\n", $options->{'outdir'}, $name );
+
+  my $fh = FileHandle->new(">$filename") 
+    or die sprintf( "Error: Unable to write file %s\n", $filename );
+
+  $fh->printf( "%s\n", $text );
+
+  $fh->close();
+
+  return;
+
+} # WriteDraft
+
+sub SendEmail { 
+  my $mail = shift(@_);
+  my $args = { @_ };
+
+  if ( $options->{'signature'} ) { 
+
+    if ( -f $options->{'signature'} ) { 
+      my $signature = `/bin/cat $options->{'signature'}`;
+      $args->{'body'} .= sprintf( "\n\n%s", $signature );
+    } 
+
+  } # if ( $options->{'signature'} )
+
+  my $result = 0;
+
+  $result = $mail->send(
+    -body    => $args->{'body'},
+    -replyto => 'georgieworley2023@gmail.com',
+    -subject => $args->{'subject'},
+    -to      => $args->{'to'},
+  );
+
+  printf( STDERR "SendEmail: School: %s Coach: %s\n", $args->{'school'}, $args->{'to'} );
+
+  return;
+
+} # SendEmail
+
+sub GenerateDraft { 
+  my( $college ) = @_;
+
+  my $text;
+
+  my $update = `/bin/cat $options->{'update'}`;
+
+  chomp($update);
+
+  if ( $college->{'asst'} ) { 
+    $text .= sprintf( "Dear Coaches %s, %s\n", $college->{'head'}, $college->{'asst'} );
+
+  } else { 
+    $text .= sprintf( "\n" );
+    $text .= sprintf( "Dear Coach %s\n", $college->{'head'} );
+
+  } 
+
+  $text .= sprintf( "\n" );
+  $text .= sprintf( "%s\n", $update );
+
+    # include <link>
+
+  if ( $options->{'link'} ) { 
+
+    $text .= sprintf( "\n" );
+    $text .= sprintf( "  %s\n", $options->{'link'} );
+    $text .= sprintf( "\n" );
+
+  } # if ( $options->{'link'} )
+
+    # concatenate <ending>
+
+  my $ending = `/bin/cat $options->{'ending'}`;
+  chomp($ending);
+
+  if ( $options->{'nickname'} ) { 
+
+    unless ( $college->{'nickname'} =~ /s$/o ) { 
+      $college->{'nickname'} .= 's';
+    } 
+
+    $ending .= sprintf( " Go %s!", $college->{'nickname'} );
+
+  } # if ( $options->{'nickname'} )
+
+  $text .= $ending;
+
+  return $text;
+
+} # GenerateDraft
+
+sub main { 
+
+  GetOptions(
+    'csv=s'       => \$options->{'csv'},
+    'dryrun'      => \$options->{'dryrun'},
+    'email'       => \$options->{'email'},
+    'ending=s'    => \$options->{'ending'},
+    'link=s'      => \$options->{'link'},
+    'nickname'    => \$options->{'nickname'},
+    'outdir=s'    => \$options->{'outdir'},
+    'signature=s' => \$options->{'signature'},
+    'subject=s'   => \$options->{'subject'},
+    'update=s'    => \$options->{'update'},
+  );
+  
+  unless ( -f $options->{'update'} ) { 
+    die sprintf( "Error: No intro file provided\n" );
+  }
+  
+  unless ( -f $options->{'ending'} ) { 
+    die sprintf( "Error: No ending file provided\n" );
+  }
+  
+  unless ( $options->{'subject'} ) { 
+    die sprintf( "Error: No email subject provided\n" );
+  } 
+
+    # DEAD:   
+    #   unless ( $options->{'outdir'} ) { 
+    #     die sprintf( "Error: No directory provided\n" );
+    #   } 
+    #
+    #   if ( -d $options->{'outdir'} ) { 
+    #     my $cmdbuf = sprintf( "/bin/rm -rf %s", $options->{'outdir'} );
+    #     printf( "exec: %s\n", $cmdbuf );
+    #     system($cmdbuf);
+    #   } 
+    #
+    #   unless ( mkdir( $options->{'outdir'}, 0777 ) ) { 
+    #     die sprintf( "Error: Unable to create directory: %s\n", $options->{'outdir'} );
+    #   } 
+
+    # my $filename = '/Users/frazerworley/Desktop/Colleges.csv';
+
+  my( $mail, $error ) = Email::Send::SMTP::Gmail->new(
+    -smtp  => 'smtp.gmail.com',
+    -login => 'georgiefworley@gmail.com',
+    -pass  => 'makvig-wufhu6-Wabjuf',
+  );
+  
+  unless ( $mail != -1 ) { 
+    die sprintf( "Error: %s\n", $error );
+  } 
+
+    # my $csv = Text::CSV->new({ binary => 1, auto_diag => 1 });
+
+  my $csv = Text::CSV->new({ binary => 1, auto_diag => 1 });
+
+  unless ( $options->{'csv'} ) { 
+    die sprintf( "Error: No CSV file specified\n" );
+  } 
+ 
+  my $fh = FileHandle->new($options->{'csv'}) 
+    or die sprintf( "Error: Unable to read CSV file: %s\n", $options->{'csv'} );
+
+  my $row = $csv->getline($fh);
+
+  while ( $row = $csv->getline($fh) ) {
+
+    next if ( $row->[0] =~ /\s*#/o );
+
+    my $college = 
+      College->new(
+        'name'       => $row->[0],
+        'nickname'   => $row->[1],
+        'head'       => $row->[2],
+        'head_email' => $row->[3],
+        'asst'       => $row->[4],
+        'asst_email' => $row->[5]
+      );
+
+    unless ( $college->{'head_email'} ) { 
+      printf( "Error: No head email specified for college %s\n", $college->{'name'} );
+      next;
+    } 
+
+    my $draft = GenerateDraft($college);
+
+    my $to = $college->{'head_email'};
+
+    if ( $college->{'asst_email'} ) { 
+      $to .= sprintf( ",%s", $college->{'asst_email'} );
+    } 
+   
+    if ( $options->{'email'} ) { 
+
+      if ( $options->{'dryrun'} ) { 
+        printf( "SendEmail: %s\n", $college->{'name'} );
+
+      } else { 
+        SendEmail( 
+          $mail,
+          'school'  => $college->{'name'},
+          'to'      => $to,
+          'subject' => $options->{'subject'},
+          'body'    => $draft
+        );
+
+      }
+
+    } # if ( $options->{'email'} )
+
+  } # while ( my $row = $csv->getline($fh) )
+
+  $fh->close();
+
+  $mail->bye()
+
+} # main 
+
+main();
+
